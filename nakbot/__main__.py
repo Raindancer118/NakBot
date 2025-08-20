@@ -6,7 +6,7 @@ from plyer import notification
 
 # ───────────────────────────────────────────────────────────────────────────────
 # DEVLOG: Ultra-Verbose Developer Logging
-# Aktivieren via: export NAKBOT_DEVLOG=1
+# Aktivieren: set DEVLOG = True
 # ───────────────────────────────────────────────────────────────────────────────
 
 def _parse_bool(val: str | None) -> bool:
@@ -123,8 +123,8 @@ if DEVLOG:
 # ───────────────────────────────────────────────────────────────────────────────
 # Konstanten / URLs / Defaults
 # ───────────────────────────────────────────────────────────────────────────────
-
-DEFAULT_PAUSE = 600
+# Pausen Dauer in **Sekunden**
+DEFAULT_PAUSE = 5
 
 LOGIN_URL = ("https://cis.nordakademie.de/"
              "?tx_felogin_login%5Baction%5D=login"
@@ -232,35 +232,116 @@ def toast(title: str, msg: str) -> None:
 # ───────────────────────────────────────────────────────────────────────────────
 # Dynamische Pause (nicht blockierend, robust)
 # ───────────────────────────────────────────────────────────────────────────────
+def _parse_pause_seconds(raw: str) -> int:
+    """
+    Akzeptiert: "8", "8.0", "8s", "8000ms"
+    Gibt Sekunden (int, >=0) zurück.
+    """
+    s = (raw or "").strip().lower()
+    if not s:
+        raise ValueError("empty pause")
+    # ms?
+    if s.endswith("ms"):
+        val = float(s[:-2].strip())
+        return max(0, int(round(val / 1000.0)))
+    # s?
+    if s.endswith("s"):
+        s = s[:-1].strip()
+    # n oder n.n
+    val = float(s)
+    return max(0, int(round(val)))
 
-def get_dynamic_pause(default: int = DEFAULT_PAUSE) -> int:
+
+def get_dynamic_pause_seconds(current_pause_s: int) -> int:
+    """
+    Nicht-blockierend den GUI-Wert holen.
+    Strategie:
+      1) Prüfe PAUSE_SOCKET; wenn fehlt -> log & behalte current
+      2) Verbinde mit Timeout 100ms
+      3) Erst versuchen zu lesen (recv)
+      4) Wenn nix kam, 'REQ\\n' senden und nochmal lesen
+      5) Wert parsen (Sekunden), ansonsten current behalten
+    """
     sock_path = os.environ.get("PAUSE_SOCKET")
-    dlog(MODULE_NAME, f"get_dynamic_pause start default={default} sock={sock_path}")
-    if not sock_path or not os.path.exists(sock_path):
-        dlog(MODULE_NAME, "get_dynamic_pause: no socket, returning default")
-        return default
+    if not sock_path:
+        logging.info("PAUSE: PAUSE_SOCKET nicht gesetzt – behalte %ss", current_pause_s)
+        return current_pause_s
+    if not os.path.exists(sock_path):
+        logging.info("PAUSE: Socket existiert nicht (%s) – behalte %ss", sock_path, current_pause_s)
+        return current_pause_s
+
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(0.1)  # maximal 100ms warten
+            s.settimeout(0.1)  # nicht blockieren
             s.connect(sock_path)
-            # Protokoll: Wir versuchen erst zu lesen (Pull).
-            try:
-                data = s.recv(32).decode().strip()
-                dlog(MODULE_NAME, f"get_dynamic_pause recv={data!r}")
-                if data.isdigit():
-                    val = int(data)
-                    logging.info(f"Pausenzeit (GUI): {val} Sekunden")
-                    return val
-                elif data:
-                    logging.warning(f"Ungültiger Pause-Wert von GUI: {data!r}")
-            except socket.timeout:
-                dlog(MODULE_NAME, "get_dynamic_pause: recv timeout, keep default")
-    except OSError as e:
-        if e.errno != errno.ECONNREFUSED:
-            dlog(MODULE_NAME, f"get_dynamic_pause socket error: {e}")
-    return default
 
-# ───────────────────────────────────────────────────────────────────────────────
+            # 1) Sofort versuchen, was zu lesen
+            try:
+                data = s.recv(64).decode().strip()
+            except socket.timeout:
+                data = ""
+
+            if not data:
+                # 2) Manche GUIs antworten erst auf Anfrage
+                try:
+                    s.sendall(b"REQ\n")
+                except Exception as e:
+                    dlog(__name__, f"PAUSE send REQ error: {e}")
+                try:
+                    data = s.recv(64).decode().strip()
+                except socket.timeout:
+                    data = ""
+
+            if data:
+                dlog(__name__, f"PAUSE raw recv={data!r}")
+                try:
+                    val = _parse_pause_seconds(data)
+                    return val
+                except Exception as e:
+                    logging.warning("PAUSE: Ungültiger Wert %r (%s) – behalte %ss", data, e, current_pause_s)
+            else:
+                dlog(__name__, "PAUSE: keine Daten vom Socket – behalte current")
+
+    except Exception as e:
+        logging.info("PAUSE: Socket-Fehler (%s) – behalte %ss", e, current_pause_s)
+
+    return current_pause_s
+
+def reactive_sleep(pause_s: int) -> int:
+    """
+    Schläft bis zu pause_s Sekunden, zeigt in der GUI 'Idle (<sek>)' als Countdown
+    und bricht SOFORT ab, wenn die GUI eine neue Pausenzeit sendet.
+    Gibt die (ggf. neue) Pausenzeit zurück.
+    """
+    end = time.time() + max(0, pause_s)
+    last_shown = None
+    check_step = 0.2  # alle 200 ms GUI abfragen / Countdown updaten
+
+    while True:
+        now = time.time()
+        remaining = max(0, int(round(end - now)))  # in Sekunden, integer
+
+        # Nur bei Änderung schicken, um Spam zu vermeiden
+        if remaining != last_shown:
+            _gui_send("STATUS", f"Idle ({remaining})")
+            last_shown = remaining
+
+        # Während des Wartens neuen GUI-Wert ziehen
+        new_pause = get_dynamic_pause_seconds(pause_s)
+        if new_pause != pause_s:
+            logging.info(f"Pause unterbrochen: {pause_s}s -> {new_pause}s (GUI)")
+            # Direkt mit neuer Pause weiter – Anzeige setzt nächste Runde fort
+            return new_pause
+
+        if remaining <= 0:
+            # Countdown beendet – Idle ohne Klammern für 'fertig'
+            _gui_send("STATUS", "Idle")
+            return pause_s
+
+        # Kleinen Happen schlafen
+        time.sleep(min(check_step, max(0.0, end - now)))
+
+# ───────────────────────────────────────────────────────────────────────────────F
 # Module laden
 # ───────────────────────────────────────────────────────────────────────────────
 
@@ -455,14 +536,18 @@ def main():
         return
 
     # Lokale Pause-Variable
-    pause = DEFAULT_PAUSE
-    dlog(MODULE_NAME, f"main loop start pause={pause}")
+    # vor der while-Schleife
+    pause_s = DEFAULT_PAUSE
+    # gleich beim Start versuchen, den GUI-Wert zu holen
+    pause_s = get_dynamic_pause_seconds(pause_s)
+    logging.info("Start-Pause (Sekunden): %s", pause_s)
 
     while True:
-        new_pause = get_dynamic_pause(default=pause)
-        if new_pause != pause:
-            logging.info(f"Pausenzeit geändert: {pause} -> {new_pause}")
-        pause = new_pause
+        # hol ggf. neuen GUI-Wert; behalte alten, wenn kein Input
+        new_pause_s = get_dynamic_pause_seconds(pause_s)
+        if new_pause_s != pause_s:
+            logging.info(f"Pausenzeit geändert: {pause_s}s -> {new_pause_s}s")
+            pause_s = new_pause_s
 
         attempts += 1
         save_counter(attempts)
@@ -472,7 +557,8 @@ def main():
             if not patterns:
                 logging.warning("Keine Module geladen – überspringe Durchlauf.")
                 _gui_send("STATUS", "Keine Module")
-                time.sleep(pause)
+                # reaktiv schlafen (unterbricht sofort, wenn GUI ändert)
+                pause_s = reactive_sleep(pause_s)
                 continue
 
         if error_count > 0:
@@ -483,7 +569,7 @@ def main():
                 error_count = 0
             except RuntimeError as err:
                 logging.error(f"Login erneut fehlgeschlagen: {err}")
-                time.sleep(pause)
+                pause_s = reactive_sleep(pause_s)
                 continue
 
         logging.info(f"Check #{attempts}")
@@ -496,8 +582,10 @@ def main():
             _gui_send("STATUS", "Fehler bei Analyse")
             error_count += 1
 
-        dlog(MODULE_NAME, f"sleep({pause})")
-        time.sleep(pause)
+        pause_s = get_dynamic_pause_seconds(pause_s)
+        dlog(__name__, f"reactive_sleep({pause_s}s)")
+        # ← hier die neue reaktive Pause
+        pause_s = reactive_sleep(pause_s)
 
 if __name__ == "__main__":
     main()

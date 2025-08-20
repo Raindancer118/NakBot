@@ -76,7 +76,7 @@ class BotRunnerApp:
 
         self.listen_progress_socket()
         self.listen_status_socket()
-        self.send_pause_loop()
+        self.listen_pause_socket()
 
         if not BUILD.exists():
             self.build()
@@ -87,31 +87,47 @@ class BotRunnerApp:
 
     def update_pause_live(self):
         now = time.time()
-        if now - self.last_pause_update < 2:
+        if now - self.last_pause_update < 0.2:
             return
         self.last_pause_update = now
         try:
             pause_val = int(self.pause_spinbox.get())
-            if hasattr(self, 'pause_socket'):
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                    s.connect(self.pause_path)
-                    s.sendall(f"{pause_val}\n".encode())
-        except Exception:
-            pass
+            # NICHT mehr verbinden/senden – der Bot holt sich den Wert per connect
+            self.pause_seconds.set(pause_val)
+            self.log(f"[Pause] neuer Wert: {pause_val}s", "info")
+        except Exception as e:
+            self.log(f"[Pause-Update-Fehler] {e}", "error")
 
-    def send_pause_loop(self):
-        def listen():
+    def listen_pause_socket(self):
+        def serve():
             try:
                 if os.path.exists(self.pause_path):
                     os.remove(self.pause_path)
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.bind(self.pause_path)
-                s.listen(1)
-                self.pause_socket = s
+                srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                srv.bind(self.pause_path)
+                srv.listen(5)
+                self.pause_socket = srv
+                self.log(f"[PauseSocket] listening on {self.pause_path}", "info")
+
+                while True:
+                    conn, _ = srv.accept()
+                    with conn:
+                        try:
+                            # optional: Anfrage lesen (z.B. "REQ\n"), nicht zwingend
+                            conn.settimeout(0.05)
+                            try:
+                                _ = conn.recv(64)
+                            except Exception:
+                                pass
+                            # IMMER aktuellen Sekundenwert senden
+                            val = int(self.pause_seconds.get())
+                            conn.sendall(f"{val}\n".encode())
+                        except Exception as e:
+                            self.log(f"[PauseSocket-Conn-Fehler] {e}", "error")
             except Exception as e:
                 self.log(f"[PauseSocket-Fehler] {e}", "error")
 
-        threading.Thread(target=listen, daemon=True).start()
+        threading.Thread(target=serve, daemon=True).start()
 
     def log(self, msg, tag="info"):
         timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
