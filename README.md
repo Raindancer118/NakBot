@@ -1,16 +1,17 @@
 # 🎓 NAK Notenbot
 
 Der **NAK Notenbot** ist ein Python-Tool, das automatisch die Notenübersicht im CIS der NORDAKADEMIE abruft, Module überwacht und bei neuen Einträgen Benachrichtigungen anzeigt.  
-Es kann sowohl im **Terminal** als auch über eine **grafische Benutzeroberfläche (GUI)** betrieben werden.
+Es kann über eine **grafische Benutzeroberfläche (GUI)** betrieben werden, alternativ auch ohne,
+wobei ich sehr stark empfehle, die GUI zu nutzen, um alle Features zur Verfügung zu haben..
 
 ---
 
 ## 🚀 Features
 
-- Automatisches Login ins CIS der NORDAKADEMIE  
+- Automatischer Login ins CIS der NORDAKADEMIE  
 - Herunterladen und Parsen des **Leistungstranskripts (PDF)**  
-- Überwachung definierter **Module** (z. B. „Diskrete Mathematik II“)  
-- Desktop-Benachrichtigungen bei neuen Noten  
+- Überwachung definierter **Module**
+- Desktop-Benachrichtigungen bei neuen Noten
 - Konfigurierbares Prüfintervall  
 - **GUI** mit Start/Stop, Fortschrittsbalken und Live-Logs  
 - Automatischer Neustart bei Absturz oder Codeänderungen  
@@ -41,7 +42,7 @@ Es gibt zwei Möglichkeiten:
 1. **Umgebungsvariablen** setzen:
 
    ```bash
-   export NAKBOT_USERNAME="20066"
+   export NAKBOT_USERNAME="username"
    export NAKBOT_PASSWORD="dein-passwort"
    ```
 
@@ -60,8 +61,8 @@ Einfach pro Zeile den Namen des Moduls angeben, wie er im Transcript steht:
 
 ```
 Diskrete Mathematik II
-Programmieren I
-BWL I
+Einführung in die ojektorientierte Programmierung I
+Allgemeine Betriebswirtschaftslehre
 ```
 
 ---
@@ -79,38 +80,11 @@ python3 gui_runner.py
 * Statusmeldungen (Login, Analyse, Fehler)
 * Live-Logausgabe
 
-### 2. Terminal-Version starten
-
-```bash
-python3 runner.py
-```
-
-* Baut bei Änderungen automatisch neu (`nakbot.pyz`)
-* Neustart bei Absturz
-
----
-
-## 🔨 Entwicklermodus (Build)
-
-Zum Erstellen der `.pyz`-Datei (Standalone-Ausführung):
-
-```bash
-shiv -c nakbot -o nakbot.pyz . -r requirements.txt
-```
-
-Danach ausführbar mit:
-
-```bash
-python3 nakbot.pyz
-```
-
----
-
 ## 📂 Projektstruktur
 
 ```
-├── gui_runner.py      # GUI-Start
-├── runner.py          # Terminal-Runner mit Autorebuild
+├── gui_runner.py      # GUI-Runner
+├── runner.py          # Terminal-Runner
 ├── setup.py           # setuptools entrypoint
 ├── nakbot/__main__.py # Bot-Logik
 ├── modules.txt        # Module, die überwacht werden
