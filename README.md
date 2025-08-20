@@ -27,66 +27,88 @@ Es kann sowohl im **Terminal** als auch über eine **grafische Benutzeroberfläc
 ```bash
 pip install -r requirements.txt
 pip install shiv
+```
 
-🔑 Konfiguration
-Zugangsdaten
+---
 
-Der Bot benötigt deine NAK-Zugangsdaten.
+## 🔑 Konfiguration
+
+### Zugangsdaten
+
+Der Bot benötigt deine **NAK-Zugangsdaten**.
 Es gibt zwei Möglichkeiten:
 
-    Umgebungsvariablen setzen:
+1. **Umgebungsvariablen** setzen:
 
-export NAKBOT_USERNAME="20066"
-export NAKBOT_PASSWORD="dein-passwort"
+   ```bash
+   export NAKBOT_USERNAME="20066"
+   export NAKBOT_PASSWORD="dein-passwort"
+   ```
 
-TOML-Datei erstellen:
-~/.config/nakbot/credentials.toml
+2. **TOML-Datei** erstellen:
+   `~/.config/nakbot/credentials.toml`
 
-    username = "20066"
-    password = "dein-passwort"
+   ```toml
+   username = "20066"
+   password = "dein-passwort"
+   ```
 
-Module
+### Module
 
-In der Datei modules.txt legst du fest, welche Module überwacht werden sollen.
+In der Datei `modules.txt` legst du fest, welche Module überwacht werden sollen.
 Einfach pro Zeile den Namen des Moduls angeben, wie er im Transcript steht:
 
+```
 Diskrete Mathematik II
 Programmieren I
 BWL I
+```
 
-▶ Nutzung
-1. GUI starten
+---
 
+## ▶ Nutzung
+
+### 1. GUI starten
+
+```bash
 python3 gui_runner.py
+```
 
-    Start/Stop des Bots per Knopfdruck
+* Start/Stop des Bots per Knopfdruck
+* Fortschrittsanzeige beim PDF-Download
+* Statusmeldungen (Login, Analyse, Fehler)
+* Live-Logausgabe
 
-    Fortschrittsanzeige beim PDF-Download
+### 2. Terminal-Version starten
 
-    Statusmeldungen (Login, Analyse, Fehler)
-
-    Live-Logausgabe
-
-2. Terminal-Version starten
-
+```bash
 python3 runner.py
+```
 
-    Baut bei Änderungen automatisch neu (nakbot.pyz)
+* Baut bei Änderungen automatisch neu (`nakbot.pyz`)
+* Neustart bei Absturz
 
-    Neustart bei Absturz
+---
 
-🔨 Entwicklermodus (Build)
+## 🔨 Entwicklermodus (Build)
 
-Zum Erstellen der .pyz-Datei (Standalone-Ausführung):
+Zum Erstellen der `.pyz`-Datei (Standalone-Ausführung):
 
+```bash
 shiv -c nakbot -o nakbot.pyz . -r requirements.txt
+```
 
 Danach ausführbar mit:
 
+```bash
 python3 nakbot.pyz
+```
 
-📂 Projektstruktur
+---
 
+## 📂 Projektstruktur
+
+```
 ├── gui_runner.py      # GUI-Start
 ├── runner.py          # Terminal-Runner mit Autorebuild
 ├── setup.py           # setuptools entrypoint
@@ -94,19 +116,12 @@ python3 nakbot.pyz
 ├── modules.txt        # Module, die überwacht werden
 ├── requirements.txt   # Abhängigkeiten
 └── runner.log         # Logdatei
+```
 
-🖥 Deployment (z. B. GitHub)
+---
+## ⚠️ Hinweise
 
-    Quellcode ins Repo pushen
-
-    Nutzer können das Projekt mit git clone herunterladen
-
-    Installation über pip install -r requirements.txt
-
-    Start via python3 gui_runner.py oder Build mit shiv
-
-⚠️ Hinweise
-
-    Der Bot ist nur für eigene Accounts gedacht.
-
-    Achtung: Missbrauch (z. B. Massenabfragen) könnte gegen die Nutzungsbedingungen der NORDAKADEMIE verstoßen.
+* Der Bot ist nur für **eigene Accounts** gedacht.
+* **ACHTUNG**: Der Autor dieses Bots übernimmt keinerlei Haftung für die Aktionen, die andere
+eventuell mit diesem Bot ausführen.
+---
