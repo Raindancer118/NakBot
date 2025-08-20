@@ -49,7 +49,7 @@ Es gibt zwei Möglichkeiten:
    `~/.config/nakbot/credentials.toml`
 
    ```toml
-   username = "20066"
+   username = "username"
    password = "dein-passwort"
    ```
 
