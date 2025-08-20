@@ -14,7 +14,7 @@ def _parse_bool(val: str | None) -> bool:
         return False
     return val.strip().lower() in {"1", "true", "yes", "on", "y"}
 
-DEVLOG = True
+DEVLOG = False
 
 # Logging-Setup
 LOG_LEVEL = logging.DEBUG if DEVLOG else logging.INFO
