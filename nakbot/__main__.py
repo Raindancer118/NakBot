@@ -3,6 +3,7 @@ import io, re, time, sys, os, pathlib, logging, requests, urllib3, socket
 from requests.exceptions import ConnectionError, HTTPError, Timeout
 from PyPDF2 import PdfReader
 from plyer import notification
+import errno
 
 # ── Logging & TLS-Warnungen ───────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
@@ -106,17 +107,27 @@ def toast(title: str, msg: str) -> None:
 # ── Dynamische Pause ───────────────
 def get_dynamic_pause(default: int = DEFAULT_PAUSE) -> int:
     sock_path = os.environ.get("PAUSE_SOCKET")
-    if not sock_path:
+    if not sock_path or not os.path.exists(sock_path):
         return default
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(0.1)  # max 100ms warten
             s.connect(sock_path)
-            s.sendall(b"REQ\n")
-            s.settimeout(1)
-            data = s.recv(32).decode().strip()
-            return int(data)
-    except Exception:
-        return default
+            try:
+                data = s.recv(32).decode().strip()
+                if data.isdigit():
+                    val = int(data)
+                    logging.info(f"Pause von GUI empfangen: {val} Sekunden")
+                    return val
+                elif data:
+                    logging.warning(f"Ungültiger Pause-Wert von GUI: {data!r}")
+            except socket.timeout:
+                pass
+    except OSError as e:
+        # z. B. wenn kein Listener -> einfach default
+        if e.errno != errno.ECONNREFUSED:
+            logging.debug(f"Pause-Socket Fehler: {e}")
+    return default
 
 # ── Module laden ───────────────────
 def load_modules() -> dict:
