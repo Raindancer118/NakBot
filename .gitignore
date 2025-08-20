@@ -1,0 +1,35 @@
+# Python Build Artefakte
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+
+venv
+.venv
+
+# Shiv Build
+nakbot.pyz
+
+# Lokale Logs & Counter
+runner.log
+attempt_counter.txt
+
+# Lokale Konfiguration / Secrets
+.env
+*.env
+credentials.*
+**/credentials.toml
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
