@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 urllib3.disable_warnings()
 requests.packages.urllib3.disable_warnings()
 
-# ── Konstante Defaults (keine Secrets hier!) ─────────
+# ── Konstante Defaults ─────────
 DEFAULT_PAUSE = 600
 
 LOGIN_URL = ("https://cis.nordakademie.de/"
@@ -28,42 +28,53 @@ HEAD = {"User-Agent": "Mozilla/5.0", "Connection": "close"}
 COUNTER_FILE = pathlib.Path(sys.argv[0]).resolve().parent / "attempt_counter.txt"
 MODULES_PATH = pathlib.Path(sys.argv[0]).resolve().parent / "modules.txt"
 
-# ── Credentials laden (ENV → Datei) ───────────────────
 def load_credentials() -> tuple[str, str]:
     """
     Reihenfolge:
-    1) Umgebungsvariablen: NAKBOT_USERNAME / NAKBOT_PASSWORD
-    2) TOML-Datei: Pfad in NAKBOT_CRED_FILE oder ~/.config/nakbot/credentials.toml
-       Format:
-         username = "20066"
-         password = "dein-passwort"
+    1) ENV: NAKBOT_USERNAME / NAKBOT_PASSWORD
+    2) Datei im Projektordner: ./.config/nakbot/credentials.toml
+    3) Datei im Home: ~/.config/nakbot/credentials.toml
     """
+    # 1) ENV prüfen
     u = os.getenv("NAKBOT_USERNAME")
     p = os.getenv("NAKBOT_PASSWORD")
     if u and p:
+        logging.info("Credentials: per ENV gefunden.")
         return u, p
+    else:
+        logging.info("Credentials: keine ENV-Variablen gesetzt.")
 
-    cred_path = os.getenv("NAKBOT_CRED_FILE")
-    if not cred_path:
-        cred_path = os.path.join(pathlib.Path.home(), ".config", "nakbot", "credentials.toml")
-    cred_path = pathlib.Path(cred_path)
-
-    if not cred_path.exists():
-        raise RuntimeError(
-            f"Credentials fehlen. Setze NAKBOT_USERNAME/NAKBOT_PASSWORD "
-            f"oder erstelle {cred_path}"
-        )
+    # 2) Projektordner prüfen
+    project_root = pathlib.Path(__file__).resolve().parent.parent
+    project_conf = project_root / ".config" / "nakbot" / "credentials.toml"
+    logging.info(f"Credentials: prüfe Projektpfad {project_conf}")
+    if project_conf.exists():
+        cred_path = project_conf
+    else:
+        # 3) Fallback: Home
+        home_conf = pathlib.Path.home() / ".config" / "nakbot" / "credentials.toml"
+        logging.info(f"Credentials: Projektdatei fehlt – probiere {home_conf}")
+        cred_path = home_conf
 
     try:
         import tomllib  # Python 3.11+
     except ModuleNotFoundError:
         import tomli as tomllib  # type: ignore
 
-    data = tomllib.loads(cred_path.read_text(encoding="utf-8"))
+    try:
+        data = tomllib.loads(cred_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logging.error(f"Credentials-Datei {cred_path} konnte nicht gelesen werden: {e}")
+        raise
+
     u = str(data.get("username", "")).strip()
     p = str(data.get("password", "")).strip()
+
     if not u or not p:
-        raise RuntimeError(f"Credentials unvollständig in {cred_path}: 'username' und 'password' erforderlich.")
+        logging.error(f"Credentials-Datei {cred_path} unvollständig: username={bool(u)} password={bool(p)}")
+        raise RuntimeError(f"Credentials unvollständig in {cred_path}")
+
+    logging.info(f"Credentials: erfolgreich geladen aus Datei {cred_path}")
     return u, p
 
 # ── GUI/IPC Helpers ───────────────────────────────────
@@ -92,7 +103,7 @@ def _gui_progress(kb: int):
 def toast(title: str, msg: str) -> None:
     notification.notify(title=title, message=msg, timeout=5)
 
-# ── Dynamische Pause aus GUI holen ────────────────────
+# ── Dynamische Pause ───────────────
 def get_dynamic_pause(default: int = DEFAULT_PAUSE) -> int:
     sock_path = os.environ.get("PAUSE_SOCKET")
     if not sock_path:
@@ -107,7 +118,7 @@ def get_dynamic_pause(default: int = DEFAULT_PAUSE) -> int:
     except Exception:
         return default
 
-# ── Module laden ──────────────────────────────────────
+# ── Module laden ───────────────────
 def load_modules() -> dict:
     try:
         lines = [line.strip() for line in MODULES_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -118,7 +129,7 @@ def load_modules() -> dict:
         logging.error("modules.txt nicht gefunden.")
         return {}
 
-# ── Login ─────────────────────────────────────────────
+# ── Login ──────────────────────────
 def login(sess: requests.Session, username: str, password: str, retries: int = 3, limit_s: int = 20) -> None:
     _gui_send("STATUS", "Logging in…")
     for attempt in range(1, retries + 1):
@@ -153,7 +164,7 @@ def login(sess: requests.Session, username: str, password: str, retries: int = 3
     _gui_send("LOGIN", "FAIL")
     raise RuntimeError("Login failed after retries")
 
-# ── Counter-Persistenz ────────────────────────────────
+# ── Counter ────────────────────────
 def load_counter() -> int:
     try:
         return int(COUNTER_FILE.read_text().strip())
@@ -163,7 +174,7 @@ def load_counter() -> int:
 def save_counter(value: int) -> None:
     COUNTER_FILE.write_text(f"{value}\n")
 
-# ── Download/Parsing ──────────────────────────────────
+# ── PDF Download/Parsing ───────────
 _last_printed_kb = 0
 
 def _print_progress(done_bytes: int) -> None:
@@ -240,7 +251,7 @@ def check_modules(sess: requests.Session, patterns: dict) -> None:
 
     _gui_send("STATUS", "Idle")
 
-# ── Main ──────────────────────────────────────────────
+# ── Main ───────────────────────────
 def main():
     attempts = load_counter()
     reload_interval = 5
@@ -272,7 +283,6 @@ def main():
     pause = DEFAULT_PAUSE
 
     while True:
-        # neuen Wert nur übernehmen, wenn GUI etwas liefert
         pause = get_dynamic_pause(default=pause)
 
         attempts += 1

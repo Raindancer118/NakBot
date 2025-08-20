@@ -24,7 +24,7 @@ attempt_counter.txt
 .env
 *.env
 credentials.*
-**/credentials.toml
+.config/nakbot/credentials.toml
 
 # Editor/IDE
 .vscode/
