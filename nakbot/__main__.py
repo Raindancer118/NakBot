@@ -1,16 +1,129 @@
 # nakbot/__main__.py
-import io, re, time, sys, os, pathlib, logging, requests, urllib3, socket
+import io, re, time, sys, os, pathlib, logging, requests, urllib3, socket, inspect, errno
 from requests.exceptions import ConnectionError, HTTPError, Timeout
 from PyPDF2 import PdfReader
 from plyer import notification
-import errno
 
-# ── Logging & TLS-Warnungen ───────────────────────────
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
+# ───────────────────────────────────────────────────────────────────────────────
+# DEVLOG: Ultra-Verbose Developer Logging
+# Aktivieren via: export NAKBOT_DEVLOG=1
+# ───────────────────────────────────────────────────────────────────────────────
+
+def _parse_bool(val: str | None) -> bool:
+    if val is None:
+        return False
+    return val.strip().lower() in {"1", "true", "yes", "on", "y"}
+
+DEVLOG = False
+
+# Logging-Setup
+LOG_LEVEL = logging.DEBUG if DEVLOG else logging.INFO
+logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s | %(message)s")
 urllib3.disable_warnings()
 requests.packages.urllib3.disable_warnings()
 
-# ── Konstante Defaults ─────────
+PKG_ROOT = pathlib.Path(__file__).resolve().parent           # .../nakbot
+REPO_ROOT = PKG_ROOT.parent                                  # Projekt-Root
+MODULE_NAME = __name__
+
+def dlog(module: str, msg: str):
+    """Developer-Log nur bei DEVLOG. Modulpräfix immer vorn dran."""
+    if DEVLOG:
+        logging.debug(f"[{module}] {msg}")
+
+def _short_repr(x, maxlen: int = 120):
+    try:
+        s = repr(x)
+    except Exception:
+        s = f"<unrepr {type(x).__name__}>"
+    if len(s) > maxlen:
+        s = s[:maxlen-3] + "..."
+    return s
+
+# ── Tracing jeder Zeile und Variablenänderungen (nur bei DEVLOG) ───────────────
+_TRACE_FRAMES: dict[int, dict] = {}
+
+def _should_trace_file(filename: str) -> bool:
+    # nur unsere Files im Repo (Performance & Signal)
+    try:
+        return str(filename).startswith(str(REPO_ROOT))
+    except Exception:
+        return False
+
+def _locals_diff(prev: dict, curr: dict) -> tuple[dict, dict, dict]:
+    """returns (added, changed, removed)"""
+    added = {k: curr[k] for k in curr.keys() - prev.keys()}
+    removed = {k: prev[k] for k in prev.keys() - curr.keys()}
+    changed = {k: (prev[k], curr[k]) for k in curr.keys() & prev.keys() if prev[k] is not curr[k] or prev[k] != curr[k]}
+    return added, changed, removed
+
+def _trace(frame, event, arg):
+    if not DEVLOG:
+        return
+    filename = frame.f_code.co_filename
+    if not _should_trace_file(filename):
+        return _trace
+    mod = frame.f_globals.get("__name__", pathlib.Path(filename).name)
+
+    if event == "call":
+        try:
+            args_info = inspect.getargvalues(frame)
+            args_repr = {name: _short_repr(args_info.locals.get(name)) for name in (args_info.args or [])}
+            if args_info.varargs:
+                args_repr["*args"] = _short_repr(args_info.locals.get(args_info.varargs))
+            if args_info.keywords:
+                args_repr["**kwargs"] = _short_repr(args_info.locals.get(args_info.keywords))
+            dlog(mod, f"CALL {frame.f_code.co_name}() @ {pathlib.Path(filename).name}:{frame.f_lineno} ARGS={args_repr}")
+            _TRACE_FRAMES[id(frame)] = dict(args_info.locals)
+        except Exception as e:
+            dlog(mod, f"CALL {frame.f_code.co_name}() (arg parse error: {e})")
+        return _trace
+
+    if event == "line":
+        try:
+            prev = _TRACE_FRAMES.get(id(frame), {})
+            curr = dict(frame.f_locals)
+            add, chg, rem = _locals_diff(prev, curr)
+            if add or chg or rem:
+                parts = []
+                if add:
+                    parts.append("ADDED={" + ", ".join(f"{k}={_short_repr(v)}" for k,v in add.items()) + "}")
+                if chg:
+                    parts.append("CHANGED={" + ", ".join(f"{k}: {_short_repr(a)} -> {_short_repr(b)}" for k,(a,b) in chg.items()) + "}")
+                if rem:
+                    parts.append("REMOVED={" + ", ".join(f"{k}={_short_repr(v)}" for k,v in rem.items()) + "}")
+                dlog(mod, f"LINE {frame.f_code.co_name}() @ {pathlib.Path(filename).name}:{frame.f_lineno} " + " ".join(parts))
+            _TRACE_FRAMES[id(frame)] = curr
+        except Exception as e:
+            dlog(mod, f"LINE trace error: {e}")
+        return _trace
+
+    if event == "return":
+        try:
+            dlog(mod, f"RETURN {frame.f_code.co_name}() -> {_short_repr(arg)}")
+        except Exception:
+            dlog(mod, f"RETURN {frame.f_code.co_name}()")
+        _TRACE_FRAMES.pop(id(frame), None)
+        return _trace
+
+    if event == "exception":
+        try:
+            exc_type, exc_val, exc_tb = arg
+            dlog(mod, f"EXC in {frame.f_code.co_name}(): {exc_type.__name__}: {_short_repr(exc_val)}")
+        except Exception:
+            dlog(mod, "EXC (unrepr)")
+        return _trace
+
+    return _trace
+
+if DEVLOG:
+    sys.settrace(_trace)
+    dlog(MODULE_NAME, f"DEVLOG enabled. Tracing under {REPO_ROOT}")
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Konstanten / URLs / Defaults
+# ───────────────────────────────────────────────────────────────────────────────
+
 DEFAULT_PAUSE = 600
 
 LOGIN_URL = ("https://cis.nordakademie.de/"
@@ -29,6 +142,10 @@ HEAD = {"User-Agent": "Mozilla/5.0", "Connection": "close"}
 COUNTER_FILE = pathlib.Path(sys.argv[0]).resolve().parent / "attempt_counter.txt"
 MODULES_PATH = pathlib.Path(sys.argv[0]).resolve().parent / "modules.txt"
 
+# ───────────────────────────────────────────────────────────────────────────────
+# Credentials laden (ENV → ./ .config/nakbot/credentials.toml → ~/.config/...)
+# ───────────────────────────────────────────────────────────────────────────────
+
 def load_credentials() -> tuple[str, str]:
     """
     Reihenfolge:
@@ -41,13 +158,12 @@ def load_credentials() -> tuple[str, str]:
     p = os.getenv("NAKBOT_PASSWORD")
     if u and p:
         logging.info("Credentials: per ENV gefunden.")
+        dlog(MODULE_NAME, f"ENV USERNAME={_short_repr(u)} PASSWORD=*** (versteckt)")
         return u, p
-    else:
-        logging.info("Credentials: keine ENV-Variablen gesetzt.")
+    logging.info("Credentials: keine ENV-Variablen gesetzt.")
 
     # 2) Projektordner prüfen
-    project_root = pathlib.Path(__file__).resolve().parent.parent
-    project_conf = project_root / ".config" / "nakbot" / "credentials.toml"
+    project_conf = (REPO_ROOT / ".config" / "nakbot" / "credentials.toml")
     logging.info(f"Credentials: prüfe Projektpfad {project_conf}")
     if project_conf.exists():
         cred_path = project_conf
@@ -63,7 +179,9 @@ def load_credentials() -> tuple[str, str]:
         import tomli as tomllib  # type: ignore
 
     try:
-        data = tomllib.loads(cred_path.read_text(encoding="utf-8"))
+        raw = cred_path.read_text(encoding="utf-8")
+        dlog(MODULE_NAME, f"Credentials: lese Datei {cred_path}, size={len(raw)}")
+        data = tomllib.loads(raw)
     except Exception as e:
         logging.error(f"Credentials-Datei {cred_path} konnte nicht gelesen werden: {e}")
         raise
@@ -76,86 +194,115 @@ def load_credentials() -> tuple[str, str]:
         raise RuntimeError(f"Credentials unvollständig in {cred_path}")
 
     logging.info(f"Credentials: erfolgreich geladen aus Datei {cred_path}")
+    dlog(MODULE_NAME, f"FILE USERNAME={_short_repr(u)} PASSWORD=*** (versteckt)")
     return u, p
 
-# ── GUI/IPC Helpers ───────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+# GUI/IPC Helpers
+# ───────────────────────────────────────────────────────────────────────────────
+
 def _gui_send(key: str, value: str):
     sock_path = os.environ.get("GUI_STATUS")
+    dlog(MODULE_NAME, f"_gui_send key={key!r} value={value!r} path={sock_path}")
     if not sock_path:
         return
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.connect(sock_path)
             s.sendall(f"{key}:{value}\n".encode())
-    except Exception:
-        pass
+    except Exception as e:
+        dlog(MODULE_NAME, f"_gui_send error: {e}")
 
 def _gui_progress(kb: int):
     sock_path = os.environ.get("GUI_PROGRESS")
+    dlog(MODULE_NAME, f"_gui_progress kb={kb} path={sock_path}")
     if not sock_path:
         return
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.connect(sock_path)
             s.sendall(f"{kb}\n".encode())
-    except Exception:
-        pass
+    except Exception as e:
+        dlog(MODULE_NAME, f"_gui_progress error: {e}")
 
 def toast(title: str, msg: str) -> None:
+    dlog(MODULE_NAME, f"toast title={title!r} msg={msg!r}")
     notification.notify(title=title, message=msg, timeout=5)
 
-# ── Dynamische Pause ───────────────
+# ───────────────────────────────────────────────────────────────────────────────
+# Dynamische Pause (nicht blockierend, robust)
+# ───────────────────────────────────────────────────────────────────────────────
+
 def get_dynamic_pause(default: int = DEFAULT_PAUSE) -> int:
     sock_path = os.environ.get("PAUSE_SOCKET")
+    dlog(MODULE_NAME, f"get_dynamic_pause start default={default} sock={sock_path}")
     if not sock_path or not os.path.exists(sock_path):
+        dlog(MODULE_NAME, "get_dynamic_pause: no socket, returning default")
         return default
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(0.1)  # max 100ms warten
+            s.settimeout(0.1)  # maximal 100ms warten
             s.connect(sock_path)
+            # Protokoll: Wir versuchen erst zu lesen (Pull).
             try:
                 data = s.recv(32).decode().strip()
+                dlog(MODULE_NAME, f"get_dynamic_pause recv={data!r}")
                 if data.isdigit():
                     val = int(data)
-                    logging.info(f"Pause von GUI empfangen: {val} Sekunden")
+                    logging.info(f"Pausenzeit (GUI): {val} Sekunden")
                     return val
                 elif data:
                     logging.warning(f"Ungültiger Pause-Wert von GUI: {data!r}")
             except socket.timeout:
-                pass
+                dlog(MODULE_NAME, "get_dynamic_pause: recv timeout, keep default")
     except OSError as e:
-        # z. B. wenn kein Listener -> einfach default
         if e.errno != errno.ECONNREFUSED:
-            logging.debug(f"Pause-Socket Fehler: {e}")
+            dlog(MODULE_NAME, f"get_dynamic_pause socket error: {e}")
     return default
 
-# ── Module laden ───────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+# Module laden
+# ───────────────────────────────────────────────────────────────────────────────
+
 def load_modules() -> dict:
+    dlog(MODULE_NAME, f"load_modules from {MODULES_PATH}")
     try:
-        lines = [line.strip() for line in MODULES_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+        raw = MODULES_PATH.read_text(encoding="utf-8")
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
         patterns = {m: re.compile(rf"{re.escape(m)}\s+([^\s]+)", re.I) for m in lines}
         logging.info(f"{len(patterns)} Modul(e) geladen aus modules.txt")
+        dlog(MODULE_NAME, f"modules={lines}")
         return patterns
     except FileNotFoundError:
         logging.error("modules.txt nicht gefunden.")
         return {}
+    except Exception as e:
+        logging.error(f"Fehler beim Lesen modules.txt: {e}")
+        return {}
 
-# ── Login ──────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+# Login
+# ───────────────────────────────────────────────────────────────────────────────
+
 def login(sess: requests.Session, username: str, password: str, retries: int = 3, limit_s: int = 20) -> None:
     _gui_send("STATUS", "Logging in…")
     for attempt in range(1, retries + 1):
         try:
             logging.info(f"Logon … (Versuch {attempt})")
             t0 = time.time()
+            dlog(MODULE_NAME, f"POST {LOGIN_URL} data.user={_short_repr(username)} data.pass=*** timeout={limit_s}")
 
             sess.post(LOGIN_URL, data={
                 "user": username, "pass": password,
                 "logintype": "login", "pid": PID, "referer": OVERVIEW_URL
             }, headers=HEAD, verify=False, timeout=limit_s)
 
+            dlog(MODULE_NAME, f"GET {OVERVIEW_URL} verify=False timeout={limit_s}")
             resp = sess.get(OVERVIEW_URL, headers=HEAD, verify=False, timeout=limit_s)
+            dt = time.time() - t0
+            dlog(MODULE_NAME, f"login roundtrip {dt:.3f}s status={getattr(resp, 'status_code', '?')}")
 
-            if time.time() - t0 > limit_s:
+            if dt > limit_s:
                 raise Timeout("Login dauerte zu lange")
 
             if "Benutzeranmeldung" in resp.text:
@@ -171,21 +318,34 @@ def login(sess: requests.Session, username: str, password: str, retries: int = 3
         except (Timeout, ConnectionError) as err:
             logging.warning(f"Login-Timeout: {err} – neuer Versuch …")
             time.sleep(2)
+        except RuntimeError as err:
+            logging.error(f"Login fehlgeschlagen: {err}")
+            raise
 
     _gui_send("LOGIN", "FAIL")
     raise RuntimeError("Login failed after retries")
 
-# ── Counter ────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+# Counter
+# ───────────────────────────────────────────────────────────────────────────────
+
 def load_counter() -> int:
     try:
-        return int(COUNTER_FILE.read_text().strip())
+        val = int(COUNTER_FILE.read_text().strip())
+        dlog(MODULE_NAME, f"load_counter -> {val}")
+        return val
     except (FileNotFoundError, ValueError):
+        dlog(MODULE_NAME, "load_counter -> 0 (new)")
         return 0
 
 def save_counter(value: int) -> None:
+    dlog(MODULE_NAME, f"save_counter {value}")
     COUNTER_FILE.write_text(f"{value}\n")
 
-# ── PDF Download/Parsing ───────────
+# ───────────────────────────────────────────────────────────────────────────────
+# Download/Parsing
+# ───────────────────────────────────────────────────────────────────────────────
+
 _last_printed_kb = 0
 
 def _print_progress(done_bytes: int) -> None:
@@ -203,6 +363,7 @@ def stream_pdf(sess: requests.Session, retries: int = 3) -> io.BytesIO:
     for attempt in range(1, retries + 1):
         try:
             logging.info(f"Download-Versuch {attempt} …")
+            dlog(MODULE_NAME, f"GET {TRANSCRIPT_URL} stream=True")
             with sess.get(TRANSCRIPT_URL, headers=HEAD, stream=True, timeout=30, verify=False) as r:
                 r.raise_for_status()
 
@@ -215,15 +376,14 @@ def stream_pdf(sess: requests.Session, retries: int = 3) -> io.BytesIO:
                 for chunk in r.iter_content(1024):
                     buf.write(chunk)
                     size += len(chunk)
-
-                    kb = size // 1024
                     _print_progress(size)
-                    _gui_progress(kb)
+                    _gui_progress(size // 1024)
 
                 buf.seek(0)
                 sys.stdout.write("\n")
                 logging.info(f"PDF erfolgreich geladen ({size/1024:.1f} kB) ✓")
                 _gui_progress(0)
+                dlog(MODULE_NAME, f"PDF bytes={size}")
                 return buf
 
         except (ConnectionError, HTTPError) as err:
@@ -234,6 +394,7 @@ def stream_pdf(sess: requests.Session, retries: int = 3) -> io.BytesIO:
     raise RuntimeError("PDF download failed")
 
 def pdf_text(buf: io.BytesIO) -> str:
+    dlog(MODULE_NAME, "pdf_text: extracting")
     return "\n".join(p.extract_text() or "" for p in PdfReader(buf).pages)
 
 def check_modules(sess: requests.Session, patterns: dict) -> None:
@@ -262,7 +423,10 @@ def check_modules(sess: requests.Session, patterns: dict) -> None:
 
     _gui_send("STATUS", "Idle")
 
-# ── Main ───────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+# Main
+# ───────────────────────────────────────────────────────────────────────────────
+
 def main():
     attempts = load_counter()
     reload_interval = 5
@@ -290,11 +454,15 @@ def main():
         logging.error(f"Login fehlgeschlagen: {err}")
         return
 
-    # Lokale Pause-Variable statt globalem PAUSE
+    # Lokale Pause-Variable
     pause = DEFAULT_PAUSE
+    dlog(MODULE_NAME, f"main loop start pause={pause}")
 
     while True:
-        pause = get_dynamic_pause(default=pause)
+        new_pause = get_dynamic_pause(default=pause)
+        if new_pause != pause:
+            logging.info(f"Pausenzeit geändert: {pause} -> {new_pause}")
+        pause = new_pause
 
         attempts += 1
         save_counter(attempts)
@@ -328,6 +496,7 @@ def main():
             _gui_send("STATUS", "Fehler bei Analyse")
             error_count += 1
 
+        dlog(MODULE_NAME, f"sleep({pause})")
         time.sleep(pause)
 
 if __name__ == "__main__":
