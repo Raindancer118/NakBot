@@ -296,7 +296,6 @@ def get_dynamic_pause_seconds(current_pause_s: int) -> int:
                 dlog(__name__, f"PAUSE raw recv={data!r}")
                 try:
                     val = _parse_pause_seconds(data)
-                    logging.info("Pausenzeit (GUI): %s s", val)
                     return val
                 except Exception as e:
                     logging.warning("PAUSE: Ungültiger Wert %r (%s) – behalte %ss", data, e, current_pause_s)
